@@ -31,9 +31,10 @@ custom datasets and real-time probability of default scoring.
 ### Accuracy Scores
 ![AccuracyScores](screenshots/accuracy_scores.png)
 
-### Prediction Results
+### Single Prediction
 ![PredictionResult](screenshots/single_prediction.png)
 
+### Prediction Results
 ![PredictionResult1](screenshots/result1.png)
 
 ![PredictionResult1](screenshots/result2.png)
