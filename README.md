@@ -41,7 +41,9 @@ LLM-powered explanations grounded in your own credit policy documents.
 ### Prediction Results
 ![PredictionResult1](screenshots/result1.png)
 
-![PredictionResult1](screenshots/result2.png)
+![PredictionResult2](screenshots/result2.png)
+
+![LLMExplanation](screenshots/llm_explaination.png)
 
 ## Tech Stack
 
