@@ -10,7 +10,7 @@ class FeatureEngineeringTransformer(BaseEstimator,TransformerMixin):
     def fit(self,data,y=None):
         return self
     def transform(self,data):
-        logger.info("Transform proccess started")
+        logger.info("Transform process started")
         c_data=data.copy()
         if self.ratio_pairs:
             try:
@@ -22,7 +22,7 @@ class FeatureEngineeringTransformer(BaseEstimator,TransformerMixin):
             except Exception as e:
                 logger.error(f"Unexpected error: {e}")
                 raise
-        logger.info("Transform proccess is done")
+        logger.info("Transform process is done")
         logger.info(f"Columns: {c_data.columns.tolist()}")
         return c_data
     def get_feature_names_out(self,input_features):

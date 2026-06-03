@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import json
 import io
+import time
 from src.utils import download_results
 
 st.set_page_config(
@@ -160,15 +161,30 @@ st.markdown("""
 if "ratio_pairs" not in st.session_state:
     st.session_state["ratio_pairs"] = []
 
+if "policy_loaded" not in st.session_state:
+    st.session_state["policy_loaded"] = False
+
+if "policy_explanation" not in st.session_state:
+    st.session_state["policy_explanation"] = None
+
 if "features" not in st.session_state:
-    response_model_info=requests.get(
-        url="http://api:8000/model/info"
-    )
-    if response_model_info.status_code==200:
-        if response_model_info.json()["model_exist"]:
-            st.session_state["features"]=response_model_info.json()["features"]
-            st.session_state["metrics"]=response_model_info.json()["metrics"]
-            st.session_state["target_column"]=response_model_info.json()["target_column"]
+    for attempt in range(30):
+        try:
+            response_model_info=requests.get(
+                url="http://api:8000/model/info", timeout=5
+            )
+            if response_model_info.status_code==200:
+                data=response_model_info.json()
+                if data.get("model_exist"):
+                    st.session_state["features"]=data["features"]
+                    st.session_state["metrics"]=data["metrics"]
+                    st.session_state["target_column"]=data["target_column"]
+            break
+        except Exception:
+            if attempt < 29:
+                time.sleep(2)
+            else:
+                st.warning("API server not reachable — start the API container first")
 
 st.markdown('<div class="section-label">01 — Training Data</div>', unsafe_allow_html=True)
 train_data = st.file_uploader("Upload training file", type=["csv", "xlsx"], label_visibility="collapsed")
@@ -264,7 +280,38 @@ else:
         with m4:
             st.metric("F1 Score", f"{metrics['f1_score']:.3f}")
 
-        st.markdown('<div class="section-label">03 — Prediction</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-label">04 — Credit Policy (RAG)</div>', unsafe_allow_html=True)
+        policy_file=st.file_uploader("Upload credit policy PDF", type=["pdf"], label_visibility="collapsed")
+        if policy_file is not None:
+            with st.spinner("Processing policy PDF..."):
+                response_policy=requests.post(
+                    url="http://api:8000/policy/upload",
+                    files={"file":(policy_file.name, policy_file.getvalue(), "application/pdf")},
+                )
+            if response_policy.status_code==200:
+                st.session_state["policy_loaded"]=True
+                data=response_policy.json()
+                st.markdown(f"""
+                <div style="background:#0D1117;border:1px solid #1A2535;border-radius:4px;
+                            padding:0.8rem 1.2rem;margin:0.6rem 0 1.2rem 0;">
+                    <span style="font-size:0.78rem;color:#00E5B4;">
+                        Policy loaded — {data['chunks']} chunks indexed
+                    </span>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.error(f"Policy upload failed: {response_policy.json().get('detail', 'Unknown error')}")
+        elif st.session_state["policy_loaded"]:
+            st.markdown("""
+            <div style="background:#0D1117;border:1px solid #1A2535;border-radius:4px;
+                        padding:0.8rem 1.2rem;margin:0.6rem 0 1.2rem 0;">
+                <span style="font-size:0.78rem;color:#00E5B4;">
+                    Policy already loaded
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown('<div class="section-label">05 — Prediction</div>', unsafe_allow_html=True)
         tab1, tab2 = st.tabs(["◈  Single Applicant", "◈  Batch Scoring"])
 
         with tab1:
@@ -285,10 +332,13 @@ else:
                         client_dict[feature] = st.text_input(feature)
 
             for key, value in client_dict.items():
-                try:
-                    client_dict[key] = float(value)
-                except:
-                    pass
+                if isinstance(value, str) and value.strip() == "":
+                    client_dict[key] = 0.0
+                else:
+                    try:
+                        client_dict[key] = float(value)
+                    except:
+                        client_dict[key] = 0.0
 
             if st.button("Score Applicant →"):
                 with st.spinner("Scoring..."):
@@ -325,6 +375,37 @@ else:
                     feature_importances, orient="index", columns=["SHAP Value"]
                 ).sort_values("SHAP Value", ascending=False)
                 st.bar_chart(shap_df)
+
+                if st.session_state["policy_loaded"]:
+                    if st.button("Explain with Policy →"):
+                        with st.spinner("Generating explanation via LLM..."):
+                            response_explain=requests.post(
+                                url="http://api:8000/predict/explain",
+                                json={"data": client_dict},
+                            )
+                        if response_explain.status_code==200:
+                            st.session_state["policy_explanation"]=response_explain.json()["results"]["explanation"]
+                        else:
+                            st.error(f"Explanation failed: {response_explain.json().get('detail', 'Unknown error')}")
+
+                    if st.session_state.get("policy_explanation"):
+                        st.markdown("""
+                        <style>
+                        .explain-box {
+                            background: #0D1117;
+                            border: 1px solid #1A2535;
+                            border-left: 3px solid #FF4D6D;
+                            border-radius: 4px;
+                            padding: 1.2rem 1.4rem;
+                            margin: 0.8rem 0 0 0;
+                            font-size: 0.82rem;
+                            line-height: 1.6;
+                            color: #C8D6E5;
+                        }
+                        </style>
+                        """, unsafe_allow_html=True)
+                        st.markdown(f'<div class="section-label">Policy-Based Explanation</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="explain-box">{st.session_state["policy_explanation"]}</div>', unsafe_allow_html=True)
 
         with tab2:
             st.markdown("""
@@ -399,6 +480,35 @@ else:
                             file_name="scoring_results.csv",
                             mime="text/csv"
                         )
+
+                        st.markdown('<div class="section-label">Explain an Applicant with Policy</div>', unsafe_allow_html=True)
+                        feature_cols = st.session_state["features"]
+                        applicant_labels = [
+                            f"Applicant #{i+1} — {batch_df.iloc[i].get(feature_cols[0], 'N/A')}"
+                            for i in range(len(batch_df))
+                        ]
+                        selected_idx = st.selectbox(
+                            "Select an applicant to explain",
+                            options=range(len(batch_df)),
+                            format_func=lambda i: applicant_labels[i],
+                            label_visibility="collapsed"
+                        )
+                        if st.button("Explain Selected Applicant with Policy →"):
+                            selected_row = batch_df.iloc[selected_idx]
+                            applicant_data = {col: float(selected_row[col]) for col in feature_cols}
+                            with st.spinner("Generating explanation via LLM..."):
+                                response_explain = requests.post(
+                                    url="http://api:8000/predict/explain",
+                                    json={"data": applicant_data},
+                                )
+                            if response_explain.status_code == 200:
+                                st.session_state["batch_explanation"] = response_explain.json()["results"]["explanation"]
+                            else:
+                                st.error(f"Explanation failed: {response_explain.json().get('detail', 'Unknown error')}")
+
+                        if st.session_state.get("batch_explanation"):
+                            st.markdown(f'<div class="section-label">Policy-Based Explanation</div>', unsafe_allow_html=True)
+                            st.markdown(f'<div class="explain-box">{st.session_state["batch_explanation"]}</div>', unsafe_allow_html=True)
             else:
                 st.markdown("""
                 <div style="background:#0D1117;border:1px dashed #1A2535;border-radius:4px;

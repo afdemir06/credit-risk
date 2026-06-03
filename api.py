@@ -4,11 +4,13 @@ from pydantic import BaseModel
 import pandas as pd
 import io
 import json
+import os
 from src.model import training,evaluation,prediction,explainability
+from src.rag import chunking, embedding, retrieval, generation
 from src import utils
 from sklearn.model_selection import train_test_split
 import logging
-from src.config import MODELS_DIR
+from src.config import MODELS_DIR, POLICIES_DIR
 import mlflow
 
 logging.basicConfig(
@@ -21,10 +23,12 @@ logger=logging.getLogger(__name__)
 class PredictSingleRequest(BaseModel):
     data: dict
 
+policy_loaded=False
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     mlflow.set_tracking_uri("http://mlflow:5000")
-    global pipeline
+    global pipeline, policy_loaded
     model_path=MODELS_DIR/"model.joblib"
     if model_path.exists():
         pipeline=utils.load_model(model_path)
@@ -32,6 +36,9 @@ async def lifespan(app: FastAPI):
     else:
         pipeline=None
         logger.warning("Model not found")
+    if embedding.collection_count() > 0:
+        policy_loaded=True
+        logger.info("Policy data found in ChromaDB")
     yield
 
 app=FastAPI(lifespan=lifespan)
@@ -57,7 +64,6 @@ async def train(
         except Exception as e:
             raise ValueError("File not read")
         finally:
-            import os
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
         logger.info(f"Columns: {df.columns.tolist()}")
@@ -108,7 +114,7 @@ async def predict_single(request: PredictSingleRequest):
             "feature_importances":feature_importances
         }
         logger.info("Explain data returned")
-        return {"status":"succes","results":result_dict}
+        return {"status":"success","results":result_dict}
     except Exception as e:
         logger.error(f"Error occured: {e}")
         raise HTTPException(status_code=500,detail=f"Error occured: {e}")
@@ -134,6 +140,65 @@ async def predict_batch(file: UploadFile=File(...)):
         logger.error(f"Error occured: {e}")
         raise HTTPException(status_code=500,detail=f"Error occured: {e}")
     
+@app.post("/policy/upload")
+async def upload_policy(file: UploadFile=File(...)):
+    try:
+        logger.info("Policy PDF upload started")
+        temp_path=f"temp_{file.filename}"
+        with open(temp_path,"wb") as f:
+            content=await file.read()
+            if not content:
+                raise ValueError("File is empty")
+            f.write(content)
+        try:
+            chunks=chunking.process_pdf(temp_path)
+            embedding.store_chunks(chunks, file.filename)
+            global policy_loaded
+            policy_loaded=True
+            logger.info(f"Policy '{file.filename}' processed ({len(chunks)} chunks)")
+            return {"status":"success","chunks":len(chunks),"filename":file.filename}
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+    except Exception as e:
+        logger.error(f"Error processing policy: {e}")
+        raise HTTPException(status_code=500,detail=f"Error processing policy: {e}")
+
+@app.post("/predict/explain")
+async def predict_explain(request: PredictSingleRequest):
+    try:
+        global pipeline, policy_loaded
+        if pipeline is None:
+            raise HTTPException(status_code=400, detail="No model trained yet")
+        if not policy_loaded:
+            raise HTTPException(status_code=400, detail="No policy uploaded yet")
+        logger.info("Explain prediction started")
+        df=pd.DataFrame([request.data])
+        predict_proba=prediction.predict_single(pipeline,df)
+        feature_importances=explainability.explain_single(pipeline,df)
+        feature_importances={k: float(v) for k, v in feature_importances.items()}
+        query=retrieval.build_query_from_features(feature_importances)
+        policy_chunks=retrieval.retrieve(query, top_k=5)
+        explanation=generation.generate_explanation(
+            pd_score=float(predict_proba[0]),
+            feature_values=request.data,
+            feature_importances=feature_importances,
+            policy_chunks=policy_chunks
+        )
+        return {
+            "status":"success",
+            "results":{
+                "predict_proba":predict_proba.tolist(),
+                "feature_importances":feature_importances,
+                "explanation":explanation
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during explain prediction: {e}")
+        raise HTTPException(status_code=500,detail=f"Error: {e}")
+
 @app.get("/model/info")
 async def model_info():
     info_path=MODELS_DIR/"features.json"

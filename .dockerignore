@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+mlruns/
+mlflow.db
+policies/chroma_db/
+screenshots/
+README.md
+data/
+models/
