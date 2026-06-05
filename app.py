@@ -179,6 +179,8 @@ if "features" not in st.session_state:
                     st.session_state["features"]=data["features"]
                     st.session_state["metrics"]=data["metrics"]
                     st.session_state["target_column"]=data["target_column"]
+                if data.get("policy_loaded"):
+                    st.session_state["policy_loaded"]=True
             break
         except Exception:
             if attempt < 29:
@@ -480,35 +482,35 @@ else:
                             file_name="scoring_results.csv",
                             mime="text/csv"
                         )
+                        if st.session_state["policy_loaded"]:
+                            st.markdown('<div class="section-label">Explain an Applicant with Policy</div>', unsafe_allow_html=True)
+                            feature_cols = st.session_state["features"]
+                            applicant_labels = [
+                                f"Applicant #{i+1} — {batch_df.iloc[i].get(feature_cols[0], 'N/A')}"
+                                for i in range(len(batch_df))
+                            ]
+                            selected_idx = st.selectbox(
+                                "Select an applicant to explain",
+                                options=range(len(batch_df)),
+                                format_func=lambda i: applicant_labels[i],
+                                label_visibility="collapsed"
+                            )
+                            if st.button("Explain Selected Applicant with Policy →"):
+                                selected_row = batch_df.iloc[selected_idx]
+                                applicant_data = {col: float(selected_row[col]) for col in feature_cols}
+                                with st.spinner("Generating explanation via LLM..."):
+                                    response_explain = requests.post(
+                                        url="http://api:8000/predict/explain",
+                                        json={"data": applicant_data},
+                                    )
+                                if response_explain.status_code == 200:
+                                    st.session_state["batch_explanation"] = response_explain.json()["results"]["explanation"]
+                                else:
+                                    st.error(f"Explanation failed: {response_explain.json().get('detail', 'Unknown error')}")
 
-                        st.markdown('<div class="section-label">Explain an Applicant with Policy</div>', unsafe_allow_html=True)
-                        feature_cols = st.session_state["features"]
-                        applicant_labels = [
-                            f"Applicant #{i+1} — {batch_df.iloc[i].get(feature_cols[0], 'N/A')}"
-                            for i in range(len(batch_df))
-                        ]
-                        selected_idx = st.selectbox(
-                            "Select an applicant to explain",
-                            options=range(len(batch_df)),
-                            format_func=lambda i: applicant_labels[i],
-                            label_visibility="collapsed"
-                        )
-                        if st.button("Explain Selected Applicant with Policy →"):
-                            selected_row = batch_df.iloc[selected_idx]
-                            applicant_data = {col: float(selected_row[col]) for col in feature_cols}
-                            with st.spinner("Generating explanation via LLM..."):
-                                response_explain = requests.post(
-                                    url="http://api:8000/predict/explain",
-                                    json={"data": applicant_data},
-                                )
-                            if response_explain.status_code == 200:
-                                st.session_state["batch_explanation"] = response_explain.json()["results"]["explanation"]
-                            else:
-                                st.error(f"Explanation failed: {response_explain.json().get('detail', 'Unknown error')}")
-
-                        if st.session_state.get("batch_explanation"):
-                            st.markdown(f'<div class="section-label">Policy-Based Explanation</div>', unsafe_allow_html=True)
-                            st.markdown(f'<div class="explain-box">{st.session_state["batch_explanation"]}</div>', unsafe_allow_html=True)
+                            if st.session_state.get("batch_explanation"):
+                                st.markdown(f'<div class="section-label">Policy-Based Explanation</div>', unsafe_allow_html=True)
+                                st.markdown(f'<div class="explain-box">{st.session_state["batch_explanation"]}</div>', unsafe_allow_html=True)
             else:
                 st.markdown("""
                 <div style="background:#0D1117;border:1px dashed #1A2535;border-radius:4px;

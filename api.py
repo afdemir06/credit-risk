@@ -210,4 +210,11 @@ async def model_info():
         metrics=json.load(f)
     with open(MODELS_DIR/"target_column.json","r") as f:
         target_column=json.load(f)
-    return {"model_exist":True,"features":features,"metrics":metrics,"target_column":target_column}
+    global policy_loaded
+    return {
+        "model_exist":True,
+        "features":features,
+        "metrics":metrics,
+        "target_column":target_column,
+        "policy_loaded":policy_loaded or embedding.collection_count()
+        }
